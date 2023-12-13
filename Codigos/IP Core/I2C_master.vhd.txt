@@ -1,0 +1,152 @@
+-----------------------------------------------------------------
+-- Module Name: lab3_user_logic
+-----------------------------------------------------------------
+
+LIBRARY IEEE;
+USE IEEE.STD_LOGIC_1164.ALL;
+USE ieee.numeric_std.ALL;
+
+entity user_logic is
+      generic(
+          PRESCALER_VALUE : integer := 100000
+      );    
+	port(
+		S_AXI_ACLK: in std_logic;
+		S_AXI_ARESETN: in std_logic;
+		I2C_ADDRESS : IN STD_LOGIC_VECTOR(6 DOWNTO 0);
+        I2C_DATA : IN STD_LOGIC_VECTOR(7 DOWNTO 0);
+		ENABLE: in std_logic;
+        SDA: inout std_logic;
+        SCL: out std_logic
+	);
+end;
+
+architecture user_logic_tb of user_logic is
+   SIGNAL PREESCALER : INTEGER := 0;
+   TYPE States IS(IDLE, START_STATE, ADDR, WRITE_DATA, SLAVE_ACK, WRITE_ACK, READ_NACK, CLK_STATE, STOP_STATE);
+   SIGNAL STATE : States := IDLE;
+   SIGNAL STATE_PREV : States := IDLE;
+   SIGNAL ADDR_SHIFT : STD_LOGIC_VECTOR(6 DOWNTO 0);
+   SIGNAL DATA_SHIFT : STD_LOGIC_VECTOR(7 DOWNTO 0);
+   SIGNAL COUNT : unsigned(3 DOWNTO 0) := "0000";
+   SIGNAL TMP :STD_LOGIC :='0';
+begin
+    
+   PROCESS (S_AXI_ACLK)
+    
+   BEGIN
+       IF rising_edge(S_AXI_ACLK) THEN
+           PREESCALER <= PREESCALER + 1;
+            IF (PREESCALER = PRESCALER_VALUE) THEN
+                TMP <= '1';
+                PREESCALER <= 0;
+            END IF;
+             if S_AXI_ARESETN = '0' then
+                SDA <= '1';
+                SCL <= '1';
+                COUNT <= x"0";
+                STATE <= IDLE;
+                ADDR_SHIFT <= "0000000";
+                DATA_SHIFT <= x"00";
+                STATE_PREV <= IDLE;
+           end if;
+           if(TMP='1')then
+               TMP<='0';
+               STATE_PREV <= STATE;
+                   CASE STATE IS
+                       WHEN IDLE =>
+                           SDA <= '1';
+                           SCL <= '1';
+                            IF ENABLE = '1' THEN
+                               ADDR_SHIFT <=  I2C_ADDRESS;--I2C_ADDRESS;--ADDRESS
+                               DATA_SHIFT <= I2C_DATA; --I2C_DATA;--DATA_OUT; 
+                               STATE <= START_STATE;
+                           END IF;
+                       WHEN START_STATE =>
+                           SDA <= '0';
+                           STATE <= ADDR;
+                       WHEN ADDR =>
+                               IF COUNT < x"7" THEN
+                               SCL <= '0';
+                               SDA <= ADDR_SHIFT(6);
+                               ADDR_SHIFT(6 DOWNTO 0) <= ADDR_SHIFT(5 DOWNTO 0) & '0';
+                               COUNT <= COUNT + 1;
+                               STATE <= CLK_STATE;
+        
+                           ELSIF COUNT = x"7" THEN
+                               SCL <= '0';
+                               SDA <= '0';
+                               COUNT <= COUNT + 1;
+                               STATE <= CLK_STATE;
+        
+                           ELSIF COUNT = x"8" THEN --ACK
+                               SDA <= 'Z';
+                               SCL <= '0';
+                               STATE <= SLAVE_ACK;
+        
+                           ELSIF COUNT < x"B" THEN
+                               SDA <= '1';
+                               SCL <= '0';
+                               COUNT <= COUNT + 1;
+                               STATE <= ADDR;
+        
+                           ELSE
+                               SCL <= '0';
+                               COUNT <= x"0";
+                               STATE <= WRITE_DATA;
+                           END IF;
+        
+                       WHEN SLAVE_ACK =>
+                           SCL <= '1';
+                           COUNT <= COUNT + 1;
+                           STATE <= ADDR;
+        
+                       WHEN WRITE_DATA =>
+                           IF COUNT < x"8" THEN
+                               SCL <= '0';
+                               SDA <= DATA_SHIFT(7);
+                               DATA_SHIFT(7 DOWNTO 0) <= DATA_SHIFT(6 DOWNTO 0) & 'U';
+                               COUNT <= COUNT + 1;
+                               STATE <= CLK_STATE;
+        
+                           ELSIF count = x"8" THEN
+                               SDA <= 'Z';
+                               SCL <= '0';
+                               STATE <= WRITE_ACK;
+                           END IF;
+        
+                       WHEN WRITE_ACK =>
+                           SCL <= '1';
+                           COUNT <= COUNT + 1;
+                           STATE <= STOP_STATE;
+                       WHEN READ_NACK =>
+                           IF (COUNT = x"9") THEN
+                               SCL <= '1';
+                               COUNT <= COUNT + 1;
+                               STATE <= CLK_STATE;
+                           ELSE
+                               SDA <= '0';
+                               STATE <= STOP_STATE;
+        
+                           END IF;
+                       WHEN STOP_STATE =>
+                           SCL <= '1';
+                           COUNT <= x"0";
+                           IF ENABLE = '0' THEN
+                                STATE <= IDLE;
+                           end if;
+                       WHEN CLK_STATE =>
+                           IF STATE_PREV = READ_NACK THEN
+                               SCL <= '0';
+                           ELSE
+                               SCL <= '1';
+                           END IF;
+                           STATE <= STATE_PREV;
+                       WHEN OTHERS =>
+                           STATE <= IDLE;
+                   END CASE;
+               end if;
+       END IF;        
+   END PROCESS;
+    
+end;
